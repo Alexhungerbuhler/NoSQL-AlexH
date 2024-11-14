@@ -24,7 +24,7 @@
         class="bg-blue-500 text-white px-4 py-2 rounded"
         :disabled="!isSyncEnabled"
       >
-        Forcer la synchronisation
+        Synchroniser
       </button>
     </div>
 
@@ -59,7 +59,7 @@
     <!-- Formulaire d'ajout/modification -->
     <div class="mb-6 border p-4 rounded">
       <h2 class="text-xl font-semibold mb-2">
-        {{ isEditing ? 'Modifier le vêtement' : 'Ajouter un vêtement' }}
+        {{ isEditing ? 'Modifier le personnage' : 'Créer un personnage' }}
       </h2>
       <form @submit.prevent="submitForm" class="space-y-4">
         <div>
@@ -116,7 +116,7 @@ export default {
       currentDoc: {
         nom: '',
         lvl: '1',
-        races: ''
+        race: ''
       },
       isEditing: false,
       editingId: null,
@@ -131,7 +131,7 @@ export default {
     syncStatusMessage() {
       switch (this.syncStatus) {
         case 'idle':
-          return 'Synchronisation inactive'
+          return 'Synchronisation en attente'
         case 'syncing':
           return 'Synchronisation en cours...'
         case 'error':
@@ -282,7 +282,7 @@ export default {
         const timestamp = new Date().toISOString()
         if (this.isEditing) {
           const doc = await this.localDb.get(this.editingId)
-          await this.localDb.put({
+          await this.localDb.post({
             ...doc,
             nom: this.currentDoc.nom,
             lvl: this.currentDoc.lvl,
