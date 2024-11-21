@@ -5,7 +5,6 @@
 
     <!-- Statut de synchronisation -->
     <div class="mb-4 p-4 rounded" :class="syncStatusClass">
-      <p class="font-semibold">{{ syncStatusMessage }}</p>
       <p v-if="pendingChanges > 0" class="text-sm">
         {{ pendingChanges }} modification(s) en attente de synchronisation
       </p>
@@ -27,10 +26,21 @@
         Synchroniser
       </button>
     </div>
+    <p v-if="syncSuccessMessage" class="text-green-500">{{ syncSuccessMessage }}</p>
+
+    <!-- historique des synchronisation -->
+    <div v-if="syncHistory.length" class="mt-4">
+      <h2 class="text-lg font-semibold">Historique de synchronisation</h2>
+      <ul>
+        <li v-for="(entry, index) in syncHistory" :key="index">
+          {{ entry }}
+        </li>
+      </ul>
+    </div>
 
     <!-- Liste des documents -->
     <div class="mb-6">
-      <h2 class="text-xl font-semibold mb-2">Liste Personnages ({{ documents.length }})</h2>
+      <h2 class="text-xl font-semibold mb-2">Liste Personnages</h2>
       <div class="grid gap-4">
         <div v-for="doc in documents" :key="doc._id" class="border p-4 rounded">
           <div class="flex justify-between items-center">
@@ -123,23 +133,14 @@ export default {
       syncStatus: 'idle', // idle, syncing, error
       isSyncEnabled: true,
       pendingChanges: 0,
-      lastSync: null
+      lastSync: null,
+      previousDoc: null,
+      syncSuccessMessage: '',
+      syncHistory: []
     }
   },
 
   computed: {
-    syncStatusMessage() {
-      switch (this.syncStatus) {
-        case 'idle':
-          return 'Synchronisation en attente'
-        case 'syncing':
-          return 'Synchronisation en cours...'
-        case 'error':
-          return 'Erreur de synchronisation'
-        default:
-          return 'État inconnu'
-      }
-    },
     syncStatusClass() {
       return {
         'bg-gray-100': this.syncStatus === 'idle',
@@ -161,8 +162,9 @@ export default {
         }
       })
 
-      // Initialiser la synchronisation
-      this.setupSync()
+      // permet la sync direct
+      // this.setupSync()
+
       // Écouter les changements locaux
       this.localDb
         .changes({
@@ -206,6 +208,9 @@ export default {
           console.error('Sync error:', err)
           this.syncStatus = 'error'
         })
+        .on('complete', () => {
+          console.log('Synchronisation terminée avec succès')
+        })
     },
 
     toggleSync() {
@@ -225,6 +230,12 @@ export default {
         this.syncStatus = 'idle'
         this.lastSync = new Date()
         await this.fetchDocuments()
+        this.syncSuccessMessage = 'Synchronisation réussie !'
+        this.addSyncHistory()
+        //set un timer pour afficher le message
+        setTimeout(() => {
+          this.syncSuccessMessage = ''
+        }, 3000)
       } catch (error) {
         console.error('Force sync error:', error)
         this.syncStatus = 'error'
@@ -290,6 +301,7 @@ export default {
             updatedAt: timestamp
           })
         } else {
+          this.previousDoc = { ...this.currentDoc }
           await this.localDb.post({
             ...this.currentDoc,
             createdAt: timestamp,
@@ -322,6 +334,13 @@ export default {
       }
     },
 
+    undoCreate() {
+      this.currentDoc = { ...this.previousDoc }
+      this.isEditing = false
+      this.editingId = null
+      this.syncSuccessMessage = ''
+    },
+
     resetForm() {
       this.currentDoc = {
         nom: '',
@@ -336,11 +355,58 @@ export default {
       if (this.sync) {
         this.sync.cancel()
       }
+    },
+
+    async updateDistantDatabase() {
+      try {
+        await this.remoteDb.bulkDocs(this.documents)
+        console.log('Base de données distante mise à jour avec succès')
+      } catch (error) {
+        console.error('Erreur lors de la mise à jour de la base de données distante:', error)
+      }
+    },
+
+    async watchRemoteDatabase() {
+      this.remoteDb
+        .changes({
+          since: 'now',
+          live: true,
+          include_docs: true
+        })
+        .on('change', (change) => {
+          if (change.deleted) {
+            this.documents = this.documents.filter((doc) => doc._id !== change.id)
+          } else {
+            const index = this.documents.findIndex((doc) => doc._id === change.id)
+            if (index !== -1) {
+              this.documents[index] = change.doc
+            } else {
+              this.documents.push(change.doc)
+            }
+          }
+        })
+        .on('error', (error) => {
+          console.error('Erreur lors de la surveillance de la base de données distante:', error)
+        })
+    },
+
+    addSyncHistory() {
+      const timestamp = new Date().toLocaleString()
+      this.syncHistory.push(`Synchronisation réussie de à ${timestamp}`)
+    },
+
+    cancelSync() {
+      if (this.sync) {
+        this.sync.cancel()
+        this.syncStatus = 'idle'
+        this.syncHistory.push(`Synchronisation annulée à ${new Date().toLocaleString()}`)
+      }
     }
   },
 
   mounted() {
     this.initDatabases()
+    this.watchRemoteDatabase()
   },
 
   beforeUnmount() {

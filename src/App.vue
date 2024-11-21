@@ -15,6 +15,7 @@ import pouch from 'pouchdb'
         <RouterLink to="/">Home</RouterLink>
         <RouterLink to="/about">About</RouterLink>
         <RouterLink to="/pageTest">Test</RouterLink>
+        <RouterLink to="/pagePost">Post</RouterLink>
       </nav>
     </div>
   </header>
