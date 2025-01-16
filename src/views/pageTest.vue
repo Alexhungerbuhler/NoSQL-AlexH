@@ -14,7 +14,8 @@ export default {
       currentDoc: {
         nom: '',
         lvl: '1',
-        race: ''
+        race: '',
+        attachments: {}
       },
       isEditing: false,
       editingId: null,
@@ -25,7 +26,12 @@ export default {
       previousDoc: null,
       syncSuccessMessage: '',
       syncHistory: [],
-      searchQuery: ''
+      searchQuery: '',
+      selectedFile: null,
+      attachmentHandler: null,
+      selectedFiles: [],
+      mediaPreview: [],
+      currentAttachments: {}
     }
   },
 
@@ -78,6 +84,9 @@ export default {
 
       // permet la sync direct
       // this.setupSync()
+
+      // Initialiser l'attachmentHandler après la création de la base de données locale
+      this.attachmentHandler = new PouchDBAttachmentHandler(this.localDb)
     },
 
     setupSync() {
@@ -171,7 +180,12 @@ export default {
 
     async fetchDocuments() {
       try {
-        const result = await this.localDb.allDocs({ include_docs: true, descending: true })
+        const result = await this.localDb.allDocs({
+          include_docs: true,
+          attachments: true,
+          binary: true,
+          descending: true
+        })
         this.documents = result.rows.map((row) => row.doc)
       } catch (error) {
         console.error('Erreur lors de la récupération des documents:', error)
@@ -194,9 +208,11 @@ export default {
     async submitForm() {
       try {
         const timestamp = new Date().toISOString()
+        let newDoc
+
         if (this.isEditing) {
           const doc = await this.localDb.get(this.editingId)
-          await this.localDb.post({
+          newDoc = await this.localDb.put({
             ...doc,
             nom: this.currentDoc.nom,
             lvl: this.currentDoc.lvl,
@@ -205,12 +221,18 @@ export default {
           })
         } else {
           this.previousDoc = { ...this.currentDoc }
-          await this.localDb.post({
+          newDoc = await this.localDb.post({
             ...this.currentDoc,
             createdAt: timestamp,
             updatedAt: timestamp
           })
         }
+
+        // Si une image est sélectionnée, l'ajouter immédiatement après la création/modification
+        if (this.selectedFile) {
+          await this.addAttachment(newDoc.id)
+        }
+
         await this.fetchDocuments()
         this.resetForm()
       } catch (error) {
@@ -324,6 +346,135 @@ export default {
       } catch (error) {
         console.error('Erreur lors de la recherche:', error)
       }
+    },
+
+    handleFileSelect(event) {
+      this.selectedFile = event.target.files[0]
+    },
+
+    async addAttachment(docId) {
+      if (!this.selectedFile) return
+      try {
+        const updatedDoc = await this.attachmentHandler.addAttachment(docId, this.selectedFile)
+        this.selectedFile = null
+        document.querySelector('input[type="file"]').value = ''
+        await this.fetchDocuments()
+      } catch (error) {
+        console.error("Erreur lors de l'ajout de la pièce jointe:", error)
+      }
+    },
+
+    async removeAttachment(docId, attachmentId) {
+      try {
+        await this.attachmentHandler.removeAttachment(docId, attachmentId)
+        await this.fetchDocuments()
+      } catch (error) {
+        console.error('Erreur lors de la suppression de la pièce jointe:', error)
+      }
+    },
+
+    async handleFileSelect(event) {
+      const files = Array.from(event.target.files)
+      this.selectedFiles = [...this.selectedFiles, ...files]
+
+      // Générer les previews
+      for (const file of files) {
+        if (file.type.startsWith('image/')) {
+          const reader = new FileReader()
+          reader.onload = (e) => {
+            this.mediaPreview.push({
+              name: file.name,
+              url: e.target.result
+            })
+          }
+          reader.readAsDataURL(file)
+        }
+      }
+    },
+
+    removeSelectedFile(fileName) {
+      this.selectedFiles = this.selectedFiles.filter((file) => file.name !== fileName)
+      this.mediaPreview = this.mediaPreview.filter((preview) => preview.name !== fileName)
+    },
+
+    async submitForm() {
+      try {
+        const timestamp = new Date().toISOString()
+        let docResponse
+
+        if (this.isEditing) {
+          const doc = await this.localDb.get(this.editingId)
+          docResponse = await this.localDb.put({
+            ...doc,
+            nom: this.currentDoc.nom,
+            lvl: this.currentDoc.lvl,
+            race: this.currentDoc.race,
+            updatedAt: timestamp
+          })
+        } else {
+          docResponse = await this.localDb.post({
+            ...this.currentDoc,
+            createdAt: timestamp,
+            updatedAt: timestamp
+          })
+        }
+
+        // Ajouter les attachments si présents
+        if (this.selectedFiles.length > 0) {
+          let currentDoc = await this.localDb.get(docResponse.id)
+
+          for (const file of this.selectedFiles) {
+            const blob = await this.fileToBlob(file)
+            const attachmentResponse = await this.localDb.putAttachment(
+              currentDoc._id,
+              file.name,
+              currentDoc._rev,
+              blob,
+              file.type
+            )
+            currentDoc = await this.localDb.get(docResponse.id)
+          }
+        }
+
+        await this.fetchDocuments()
+        this.resetForm()
+      } catch (error) {
+        console.error('Erreur lors de la sauvegarde:', error)
+      }
+    },
+
+    async removeAttachment(docId, attachmentId) {
+      try {
+        const doc = await this.localDb.get(docId)
+        await this.localDb.removeAttachment(docId, attachmentId, doc._rev)
+        await this.fetchDocuments()
+      } catch (error) {
+        console.error('Erreur lors de la suppression de la pièce jointe:', error)
+      }
+    },
+
+    fileToBlob(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => {
+          const blob = new Blob([reader.result], { type: file.type })
+          resolve(blob)
+        }
+        reader.onerror = reject
+        reader.readAsArrayBuffer(file)
+      })
+    },
+
+    resetForm() {
+      this.currentDoc = {
+        nom: '',
+        lvl: '1',
+        race: ''
+      }
+      this.isEditing = false
+      this.editingId = null
+      this.selectedFiles = []
+      this.mediaPreview = []
     }
   },
 
@@ -335,6 +486,10 @@ export default {
   beforeUnmount() {
     this.cleanup()
   }
+}
+
+class PouchDBAttachmentHandler {
+  // ... coller ici toute la classe PouchDBAttachmentHandler ...
 }
 </script>
 
@@ -389,34 +544,6 @@ export default {
       />
     </div>
 
-    <!-- Liste des documents -->
-    <div class="mb-6">
-      <h2 class="text-xl font-semibold mb-2">Liste Personnages</h2>
-      <div class="grid gap-4">
-        <div v-for="doc in documents" :key="doc._id" class="border p-4 rounded">
-          <div class="flex justify-between items-center">
-            <div>
-              <h3 class="font-bold">{{ doc.nom }}</h3>
-              <p>Lvl: {{ doc.lvl }}</p>
-              <p>Race: {{ doc.race }}</p>
-              <p class="text-sm text-gray-500">
-                Dernière modification:
-                {{ new Date(doc.updatedAt || doc.createdAt).toLocaleString() }}
-              </p>
-            </div>
-            <div>
-              <button @click="editDoc(doc)" class="bg-blue-500 text-white px-3 py-1 rounded mr-2">
-                Modifier
-              </button>
-              <button @click="deleteDoc(doc)" class="bg-red-500 text-white px-3 py-1 rounded">
-                Supprimer
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
     <!-- Formulaire d'ajout/modification -->
     <div class="mb-6 border p-4 rounded">
       <h2 class="text-xl font-semibold mb-2">
@@ -446,6 +573,22 @@ export default {
             <option value="Orc">Orc</option>
           </select>
         </div>
+        <div>
+          <label class="block mb-1">Image</label>
+          <input
+            type="file"
+            accept="image/*"
+            @change="handleFileSelect"
+            class="border p-2 w-full rounded"
+          />
+          <button
+            v-if="selectedFile && editingId"
+            @click="addAttachment(editingId)"
+            class="bg-blue-500 text-white px-3 py-1 rounded mt-2"
+          >
+            Ajouter l'image
+          </button>
+        </div>
         <div class="flex gap-2">
           <button type="submit" class="bg-green-500 text-white px-4 py-2 rounded">
             {{ isEditing ? 'Mettre à jour' : 'Ajouter' }}
@@ -459,6 +602,53 @@ export default {
           </button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- Liste des documents -->
+  <div class="mb-6 grid grid-cols-4 gap-4">
+    <h2 class="text-xl font-semibold mb-2">Liste Personnages</h2>
+    <div class="grid grid-cols-4 gap-4">
+      <div v-for="doc in documents" :key="doc._id" class="border p-4 rounded">
+        <div class="flex justify-between items-center">
+          <div>
+            <h3 class="font-bold">{{ doc.nom }}</h3>
+            <p>Lvl: {{ doc.lvl }}</p>
+            <p>Race: {{ doc.race }}</p>
+            <p class="text-sm text-gray-500">
+              Dernière modification:
+              {{ new Date(doc.updatedAt || doc.createdAt).toLocaleString() }}
+            </p>
+          </div>
+          <div>
+            <button @click="editDoc(doc)" class="bg-blue-500 text-white px-3 py-1 rounded mr-2">
+              Modifier
+            </button>
+            <button @click="deleteDoc(doc)" class="bg-red-500 text-white px-3 py-1 rounded">
+              Supprimer
+            </button>
+          </div>
+        </div>
+        <div v-if="doc._attachments" class="mt-2">
+          <h4 class="font-semibold">Images :</h4>
+          <div
+            v-for="(attachment, attachmentId) in doc._attachments"
+            :key="attachmentId"
+            class="mt-2"
+          >
+            <img
+              :src="`data:${attachment.content_type};base64,${attachment.data}`"
+              class="max-w-xs h-auto"
+            />
+            <button
+              @click="removeAttachment(doc._id, attachmentId)"
+              class="bg-red-500 text-white px-2 py-1 rounded text-sm mt-1"
+            >
+              Supprimer l'image
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>

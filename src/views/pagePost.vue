@@ -23,6 +23,9 @@
 import PouchDB from 'pouchdb'
 import { onBeforeUnmount } from 'vue'
 
+const PouchDB = require('pouchdb')
+PouchDB.plugin(require('pouchdb-find'))
+
 export default {
   data() {
     return {
@@ -63,6 +66,16 @@ export default {
           })
       }
     },
+
+    async createIndex({
+    index: {
+    fields: ['foo']
+  }
+}).then(function (result) {
+  // handle result
+}).catch(function (err) {
+  console.log(err);
+});
 
     getFakePost() {
       return {
